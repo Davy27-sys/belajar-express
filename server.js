@@ -1,51 +1,108 @@
 const express = require("express");
-
 const app = express();
 const PORT = 3001;
 
-const soal = [
+// Middleware untuk membaca body JSON
+app.use(express.json());
+
+// Data awal soal
+let soal = [
   {
     id: 1,
-    pertanyaan: "Apa kepanjangan CPU?",
-    jawaban: ["Central Processing Unit", "Computer Personal Unit"],
-    jawabanBenar: "Central Processing Unit",
+    pertanyaan: "Apa ibu kota Indonesia?",
+    jawaban: ["Jakarta", "Bandung", "Surabaya", "Semarang"],
+    jawabanBenar: "Jakarta",
   },
   {
     id: 2,
-    pertanyaan: "Apa fungsi RAM?",
-    jawaban: ["Menyimpan data sementara", "Mencetak dokumen"],
-    jawabanBenar: "Menyimpan data sementara",
+    pertanyaan: "Berapa hasil 2 + 2?",
+    jawaban: ["3", "4", "5", "6"],
+    jawabanBenar: "4",
   },
 ];
 
-app.get("/", (req, res) => {
-  res.send("Server Express berhasil berjalan!");
-});
-
-app.get("/tentang", (req, res) => {
-  res.json({
-    nama: "Belajar Express",
-    status: "Aktif",
-  });
-});
-
+// GET semua soal
 app.get("/soal", (req, res) => {
   res.json(soal);
 });
 
+// GET soal berdasarkan ID
 app.get("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
-  const dataSoal = soal.find((item) => item.id === id);
+  const data = soal.find((item) => item.id === id);
 
-  if (!dataSoal) {
-    return res.status(404).json({
-      pesan: "Soal tidak ditemukan",
+  if (!data) {
+    return res.status(404).json({ pesan: "Soal tidak ditemukan" });
+  }
+
+  res.json(data);
+});
+
+// POST tambah soal baru
+app.post("/soal", (req, res) => {
+  const { pertanyaan, jawaban, jawabanBenar } = req.body;
+
+  if (!pertanyaan || !Array.isArray(jawaban) || !jawabanBenar) {
+    return res.status(400).json({
+      pesan: "Pertanyaan, jawaban (array), dan jawabanBenar wajib diisi",
     });
   }
 
-  res.json(dataSoal);
+  const idBaru =
+    soal.length > 0 ? Math.max(...soal.map((item) => item.id)) + 1 : 1;
+
+  const soalBaru = {
+    id: idBaru,
+    pertanyaan,
+    jawaban,
+    jawabanBenar,
+  };
+
+  soal.push(soalBaru);
+
+  res.status(201).json(soalBaru);
 });
 
+// PUT ubah soal berdasarkan ID
+app.put("/soal/:id", (req, res) => {
+  const id = Number(req.params.id);
+  const index = soal.findIndex((item) => item.id === id);
+
+  if (index === -1) {
+    return res.status(404).json({ pesan: "Soal tidak ditemukan" });
+  }
+
+  const { pertanyaan, jawaban, jawabanBenar } = req.body;
+
+  soal[index] = {
+    ...soal[index],
+    ...(pertanyaan !== undefined && { pertanyaan }),
+    ...(jawaban !== undefined && { jawaban }),
+    ...(jawabanBenar !== undefined && { jawabanBenar }),
+    id,
+  };
+
+  res.json(soal[index]);
+});
+
+// DELETE hapus soal berdasarkan ID
+app.delete("/soal/:id", (req, res) => {
+  const id = Number(req.params.id);
+  const index = soal.findIndex((item) => item.id === id);
+
+  if (index === -1) {
+    return res.status(404).json({ pesan: "Soal tidak ditemukan" });
+  }
+
+  const soalDihapus = soal.splice(index, 1)[0];
+
+  res.json({
+    pesan: "Soal berhasil dihapus",
+    data: soalDihapus,
+  });
+});
+
+// Jalankan server
 app.listen(PORT, () => {
   console.log(`Server berjalan di http://localhost:${PORT}`);
 });
