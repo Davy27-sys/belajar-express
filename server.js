@@ -32,17 +32,47 @@ app.get("/soal/:id", (req, res) => {
   const data = soal.find((item) => item.id === id);
 
   if (!data) {
-    return res.status(404).json({ pesan: "Soal tidak ditemukan" });
+    return res.status(404).json({
+      pesan: "Soal tidak ditemukan",
+    });
   }
 
   res.json(data);
+});
+
+// QUERY mencari soal berdasarkan kata kunci dari body JSON
+app.query("/soal", (req, res) => {
+  const { cari } = req.body;
+
+  if (typeof cari !== "string" || !cari.trim()) {
+    return res.status(400).json({
+      pesan: "Kata kunci 'cari' wajib diisi",
+    });
+  }
+
+  const kataKunci = cari.trim().toLowerCase();
+
+  const hasil = soal.filter((item) =>
+    item.pertanyaan.toLowerCase().includes(kataKunci),
+  );
+
+  res.json({
+    total: hasil.length,
+    data: hasil,
+  });
 });
 
 // POST tambah soal baru
 app.post("/soal", (req, res) => {
   const { pertanyaan, jawaban, jawabanBenar } = req.body;
 
-  if (!pertanyaan || !Array.isArray(jawaban) || !jawabanBenar) {
+  if (
+    typeof pertanyaan !== "string" ||
+    !pertanyaan.trim() ||
+    !Array.isArray(jawaban) ||
+    !jawaban.length ||
+    !jawabanBenar
+  ) {
     return res.status(400).json({
       pesan: "Pertanyaan, jawaban (array), dan jawabanBenar wajib diisi",
     });
@@ -53,7 +83,7 @@ app.post("/soal", (req, res) => {
 
   const soalBaru = {
     id: idBaru,
-    pertanyaan,
+    pertanyaan: pertanyaan.trim(),
     jawaban,
     jawabanBenar,
   };
@@ -69,7 +99,9 @@ app.put("/soal/:id", (req, res) => {
   const index = soal.findIndex((item) => item.id === id);
 
   if (index === -1) {
-    return res.status(404).json({ pesan: "Soal tidak ditemukan" });
+    return res.status(404).json({
+      pesan: "Soal tidak ditemukan",
+    });
   }
 
   const { pertanyaan, jawaban, jawabanBenar } = req.body;
@@ -91,7 +123,9 @@ app.delete("/soal/:id", (req, res) => {
   const index = soal.findIndex((item) => item.id === id);
 
   if (index === -1) {
-    return res.status(404).json({ pesan: "Soal tidak ditemukan" });
+    return res.status(404).json({
+      pesan: "Soal tidak ditemukan",
+    });
   }
 
   const soalDihapus = soal.splice(index, 1)[0];
@@ -102,7 +136,7 @@ app.delete("/soal/:id", (req, res) => {
   });
 });
 
-// Jalankan server
+// Jalankan server setelah semua route didaftarkan
 app.listen(PORT, () => {
   console.log(`Server berjalan di http://localhost:${PORT}`);
 });
