@@ -1,25 +1,23 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
+
 const app = express();
 const PORT = 3001;
 
 // Middleware untuk membaca body JSON
 app.use(express.json());
 
-// Data awal soal
-let soal = [
-  {
-    id: 1,
-    pertanyaan: "Apa ibu kota Indonesia?",
-    jawaban: ["Jakarta", "Bandung", "Surabaya", "Semarang"],
-    jawabanBenar: "Jakarta",
-  },
-  {
-    id: 2,
-    pertanyaan: "Berapa hasil 2 + 2?",
-    jawaban: ["3", "4", "5", "6"],
-    jawabanBenar: "4",
-  },
-];
+// Lokasi file penyimpanan soal
+const fileSoal = path.join(__dirname, "soal.json");
+
+// Baca data soal dari file saat server mulai
+let soal = JSON.parse(fs.readFileSync(fileSoal, "utf8"));
+
+// Fungsi menyimpan data soal ke file
+function simpanSoal() {
+  fs.writeFileSync(fileSoal, JSON.stringify(soal, null, 2), "utf8");
+}
 
 // GET semua soal
 app.get("/soal", (req, res) => {
@@ -27,7 +25,7 @@ app.get("/soal", (req, res) => {
 });
 
 // GET soal berdasarkan ID
-app.get("/soal/:id", (req, res) => {
+app.get("/soal/", (req, res) => {
   const id = Number(req.params.id);
   const data = soal.find((item) => item.id === id);
 
@@ -71,7 +69,8 @@ app.post("/soal", (req, res) => {
     !pertanyaan.trim() ||
     !Array.isArray(jawaban) ||
     !jawaban.length ||
-    !jawabanBenar
+    typeof jawabanBenar !== "string" ||
+    !jawabanBenar.trim()
   ) {
     return res.status(400).json({
       pesan: "Pertanyaan, jawaban (array), dan jawabanBenar wajib diisi",
@@ -85,16 +84,17 @@ app.post("/soal", (req, res) => {
     id: idBaru,
     pertanyaan: pertanyaan.trim(),
     jawaban,
-    jawabanBenar,
+    jawabanBenar: jawabanBenar.trim(),
   };
 
   soal.push(soalBaru);
+  simpanSoal();
 
   res.status(201).json(soalBaru);
 });
 
 // PUT ubah soal berdasarkan ID
-app.put("/soal/:id", (req, res) => {
+app.put("/soal/", (req, res) => {
   const id = Number(req.params.id);
   const index = soal.findIndex((item) => item.id === id);
 
@@ -114,11 +114,13 @@ app.put("/soal/:id", (req, res) => {
     id,
   };
 
+  simpanSoal();
+
   res.json(soal[index]);
 });
 
 // DELETE hapus soal berdasarkan ID
-app.delete("/soal/:id", (req, res) => {
+app.delete("/soal/", (req, res) => {
   const id = Number(req.params.id);
   const index = soal.findIndex((item) => item.id === id);
 
@@ -129,6 +131,8 @@ app.delete("/soal/:id", (req, res) => {
   }
 
   const soalDihapus = soal.splice(index, 1)[0];
+
+  simpanSoal();
 
   res.json({
     pesan: "Soal berhasil dihapus",
