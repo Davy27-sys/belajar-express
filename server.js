@@ -21,11 +21,11 @@ function simpanSoal() {
 
 // GET semua soal
 app.get("/soal", (req, res) => {
-  res.json(soal);
+  res.status(200).json(soal);
 });
 
 // GET soal berdasarkan ID
-app.get("/soal/", (req, res) => {
+app.get("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
   const data = soal.find((item) => item.id === id);
 
@@ -35,7 +35,7 @@ app.get("/soal/", (req, res) => {
     });
   }
 
-  res.json(data);
+  res.status(200).json(data);
 });
 
 // QUERY mencari soal berdasarkan kata kunci dari body JSON
@@ -54,7 +54,7 @@ app.query("/soal", (req, res) => {
     item.pertanyaan.toLowerCase().includes(kataKunci),
   );
 
-  res.json({
+  res.status(200).json({
     total: hasil.length,
     data: hasil,
   });
@@ -68,7 +68,7 @@ app.post("/soal", (req, res) => {
     typeof pertanyaan !== "string" ||
     !pertanyaan.trim() ||
     !Array.isArray(jawaban) ||
-    !jawaban.length ||
+    jawaban.length === 0 ||
     typeof jawabanBenar !== "string" ||
     !jawabanBenar.trim()
   ) {
@@ -94,11 +94,11 @@ app.post("/soal", (req, res) => {
 });
 
 // PUT ubah soal berdasarkan ID
-app.put("/soal/", (req, res) => {
+app.put("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
   const index = soal.findIndex((item) => item.id === id);
 
-  if (index === -1) {
+  if (!Number.isInteger(id) || index === -1) {
     return res.status(404).json({
       pesan: "Soal tidak ditemukan",
     });
@@ -106,25 +106,46 @@ app.put("/soal/", (req, res) => {
 
   const { pertanyaan, jawaban, jawabanBenar } = req.body;
 
+  // Validasi data jika properti dikirim
+  if (
+    (pertanyaan !== undefined &&
+      (typeof pertanyaan !== "string" || !pertanyaan.trim())) ||
+    (jawaban !== undefined &&
+      (!Array.isArray(jawaban) || jawaban.length === 0)) ||
+    (jawabanBenar !== undefined &&
+      (typeof jawabanBenar !== "string" || !jawabanBenar.trim()))
+  ) {
+    return res.status(400).json({
+      pesan: "Data pertanyaan, jawaban, atau jawabanBenar tidak valid",
+    });
+  }
+
   soal[index] = {
     ...soal[index],
-    ...(pertanyaan !== undefined && { pertanyaan }),
+    ...(pertanyaan !== undefined && {
+      pertanyaan: pertanyaan.trim(),
+    }),
     ...(jawaban !== undefined && { jawaban }),
-    ...(jawabanBenar !== undefined && { jawabanBenar }),
+    ...(jawabanBenar !== undefined && {
+      jawabanBenar: jawabanBenar.trim(),
+    }),
     id,
   };
 
   simpanSoal();
 
-  res.json(soal[index]);
+  res.status(200).json({
+    pesan: "Soal berhasil diubah",
+    data: soal[index],
+  });
 });
 
 // DELETE hapus soal berdasarkan ID
-app.delete("/soal/", (req, res) => {
+app.delete("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
   const index = soal.findIndex((item) => item.id === id);
 
-  if (index === -1) {
+  if (!Number.isInteger(id) || index === -1) {
     return res.status(404).json({
       pesan: "Soal tidak ditemukan",
     });
@@ -134,7 +155,7 @@ app.delete("/soal/", (req, res) => {
 
   simpanSoal();
 
-  res.json({
+  res.status(200).json({
     pesan: "Soal berhasil dihapus",
     data: soalDihapus,
   });

@@ -1,16 +1,5 @@
 [
   {
-    "id": 1,
-    "pertanyaan": "Apa ibu kota Indonesia?",
-    "jawaban": [
-      "Jakarta",
-      "Bandung",
-      "Surabaya",
-      "Semarang"
-    ],
-    "jawabanBenar": "Jakarta"
-  },
-  {
     "id": 2,
     "pertanyaan": "Berapa hasil 2 + 2?",
     "jawaban": [
