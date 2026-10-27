@@ -1,6 +1,6 @@
+
 const express = require("express");
-const fs = require("fs");
-const path = require("path");
+const Database = require("better-sqlite3");
 
 const app = express();
 const PORT = 3001;
@@ -8,26 +8,45 @@ const PORT = 3001;
 // Middleware untuk membaca body JSON
 app.use(express.json());
 
-// Lokasi file penyimpanan soal
-const fileSoal = path.join(__dirname, "soal.json");
+// Koneksi ke database SQLite
+const db = new Database("soal.db");
 
-// Baca data soal dari file saat server mulai
-let soal = JSON.parse(fs.readFileSync(fileSoal, "utf8"));
-
-// Fungsi menyimpan data soal ke file
-function simpanSoal() {
-  fs.writeFileSync(fileSoal, JSON.stringify(soal, null, 2), "utf8");
-}
+// Membuat tabel soal jika belum ada
+db.exec(`
+  CREATE TABLE IF NOT EXISTS soal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pertanyaan TEXT NOT NULL,
+    jawaban TEXT NOT NULL,
+    jawabanBenar TEXT NOT NULL
+  )
+`);
 
 // GET semua soal
 app.get("/soal", (req, res) => {
-  res.status(200).json(soal);
+  const soal = db.prepare("SELECT * FROM soal").all();
+
+  // Ubah jawaban dari teks JSON menjadi array
+  const hasil = soal.map((item) => ({
+    ...item,
+    jawaban: JSON.parse(item.jawaban),
+  }));
+
+  res.status(200).json(hasil);
 });
 
 // GET soal berdasarkan ID
 app.get("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
-  const data = soal.find((item) => item.id === id);
+
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({
+      pesan: "ID soal tidak valid",
+    });
+  }
+
+  const data = db
+    .prepare("SELECT * FROM soal WHERE id = ?")
+    .get(id);
 
   if (!data) {
     return res.status(404).json({
@@ -35,10 +54,12 @@ app.get("/soal/:id", (req, res) => {
     });
   }
 
+  data.jawaban = JSON.parse(data.jawaban);
+
   res.status(200).json(data);
 });
 
-// QUERY mencari soal berdasarkan kata kunci dari body JSON
+// QUERY mencari soal berdasarkan kata kunci
 app.query("/soal", (req, res) => {
   const { cari } = req.body;
 
@@ -48,11 +69,16 @@ app.query("/soal", (req, res) => {
     });
   }
 
-  const kataKunci = cari.trim().toLowerCase();
-
-  const hasil = soal.filter((item) =>
-    item.pertanyaan.toLowerCase().includes(kataKunci),
-  );
+  const hasil = db
+    .prepare(`
+      SELECT * FROM soal
+      WHERE LOWER(pertanyaan) LIKE ?
+    `)
+    .all(`%${cari.trim().toLowerCase()}%`)
+    .map((item) => ({
+      ...item,
+      jawaban: JSON.parse(item.jawaban),
+    }));
 
   res.status(200).json({
     total: hasil.length,
@@ -69,26 +95,37 @@ app.post("/soal", (req, res) => {
     !pertanyaan.trim() ||
     !Array.isArray(jawaban) ||
     jawaban.length === 0 ||
+    !jawaban.every((item) => typeof item === "string") ||
     typeof jawabanBenar !== "string" ||
     !jawabanBenar.trim()
   ) {
     return res.status(400).json({
-      pesan: "Pertanyaan, jawaban (array), dan jawabanBenar wajib diisi",
+      pesan: "Pertanyaan, jawaban (array teks), dan jawabanBenar wajib diisi",
     });
   }
 
-  const idBaru =
-    soal.length > 0 ? Math.max(...soal.map((item) => item.id)) + 1 : 1;
+  if (!jawaban.includes(jawabanBenar.trim())) {
+    return res.status(400).json({
+      pesan: "jawabanBenar harus ada di dalam pilihan jawaban",
+    });
+  }
 
-  const soalBaru = {
-    id: idBaru,
-    pertanyaan: pertanyaan.trim(),
-    jawaban,
-    jawabanBenar: jawabanBenar.trim(),
-  };
+  const hasil = db
+    .prepare(`
+      INSERT INTO soal (pertanyaan, jawaban, jawabanBenar)
+      VALUES (?, ?, ?)
+    `)
+    .run(
+      pertanyaan.trim(),
+      JSON.stringify(jawaban),
+      jawabanBenar.trim()
+    );
 
-  soal.push(soalBaru);
-  simpanSoal();
+  const soalBaru = db
+    .prepare("SELECT * FROM soal WHERE id = ?")
+    .get(hasil.lastInsertRowid);
+
+  soalBaru.jawaban = JSON.parse(soalBaru.jawaban);
 
   res.status(201).json(soalBaru);
 });
@@ -96,9 +133,18 @@ app.post("/soal", (req, res) => {
 // PUT ubah soal berdasarkan ID
 app.put("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
-  const index = soal.findIndex((item) => item.id === id);
 
-  if (!Number.isInteger(id) || index === -1) {
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({
+      pesan: "ID soal tidak valid",
+    });
+  }
+
+  const dataLama = db
+    .prepare("SELECT * FROM soal WHERE id = ?")
+    .get(id);
+
+  if (!dataLama) {
     return res.status(404).json({
       pesan: "Soal tidak ditemukan",
     });
@@ -106,12 +152,13 @@ app.put("/soal/:id", (req, res) => {
 
   const { pertanyaan, jawaban, jawabanBenar } = req.body;
 
-  // Validasi data jika properti dikirim
   if (
     (pertanyaan !== undefined &&
       (typeof pertanyaan !== "string" || !pertanyaan.trim())) ||
     (jawaban !== undefined &&
-      (!Array.isArray(jawaban) || jawaban.length === 0)) ||
+      (!Array.isArray(jawaban) ||
+        jawaban.length === 0 ||
+        !jawaban.every((item) => typeof item === "string"))) ||
     (jawabanBenar !== undefined &&
       (typeof jawabanBenar !== "string" || !jawabanBenar.trim()))
   ) {
@@ -120,48 +167,81 @@ app.put("/soal/:id", (req, res) => {
     });
   }
 
-  soal[index] = {
-    ...soal[index],
-    ...(pertanyaan !== undefined && {
-      pertanyaan: pertanyaan.trim(),
-    }),
-    ...(jawaban !== undefined && { jawaban }),
-    ...(jawabanBenar !== undefined && {
-      jawabanBenar: jawabanBenar.trim(),
-    }),
-    id,
-  };
+  const pertanyaanBaru =
+    pertanyaan !== undefined
+      ? pertanyaan.trim()
+      : dataLama.pertanyaan;
 
-  simpanSoal();
+  const jawabanBaru =
+    jawaban !== undefined
+      ? jawaban
+      : JSON.parse(dataLama.jawaban);
+
+  const jawabanBenarBaru =
+    jawabanBenar !== undefined
+      ? jawabanBenar.trim()
+      : dataLama.jawabanBenar;
+
+  if (!jawabanBaru.includes(jawabanBenarBaru)) {
+    return res.status(400).json({
+      pesan: "jawabanBenar harus ada di dalam pilihan jawaban",
+    });
+  }
+
+  db.prepare(`
+    UPDATE soal
+    SET pertanyaan = ?, jawaban = ?, jawabanBenar = ?
+    WHERE id = ?
+  `).run(
+    pertanyaanBaru,
+    JSON.stringify(jawabanBaru),
+    jawabanBenarBaru,
+    id
+  );
+
+  const dataBaru = db
+    .prepare("SELECT * FROM soal WHERE id = ?")
+    .get(id);
+
+  dataBaru.jawaban = JSON.parse(dataBaru.jawaban);
 
   res.status(200).json({
     pesan: "Soal berhasil diubah",
-    data: soal[index],
+    data: dataBaru,
   });
 });
 
 // DELETE hapus soal berdasarkan ID
 app.delete("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
-  const index = soal.findIndex((item) => item.id === id);
 
-  if (!Number.isInteger(id) || index === -1) {
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({
+      pesan: "ID soal tidak valid",
+    });
+  }
+
+  const data = db
+    .prepare("SELECT * FROM soal WHERE id = ?")
+    .get(id);
+
+  if (!data) {
     return res.status(404).json({
       pesan: "Soal tidak ditemukan",
     });
   }
 
-  const soalDihapus = soal.splice(index, 1)[0];
+  db.prepare("DELETE FROM soal WHERE id = ?").run(id);
 
-  simpanSoal();
+  data.jawaban = JSON.parse(data.jawaban);
 
   res.status(200).json({
     pesan: "Soal berhasil dihapus",
-    data: soalDihapus,
+    data,
   });
 });
 
-// Jalankan server setelah semua route didaftarkan
+// Jalankan server
 app.listen(PORT, () => {
   console.log(`Server berjalan di http://localhost:${PORT}`);
 });

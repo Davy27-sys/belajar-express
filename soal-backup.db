@@ -1,0 +1,8 @@
+db.exec(`
+  CREATE TABLE IF NOT EXISTS soal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pertanyaan TEXT NOT NULL,
+    jawaban TEXT NOT NULL,
+    jawabanBenar TEXT NOT NULL
+  )
+`);
