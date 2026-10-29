@@ -23,7 +23,7 @@ db.exec(`
   )
 `);
 
-// MIGRASI: hanya jika tabel soal masih kosong
+// Migrasi data dari soal.json jika tabel masih kosong
 const jumlahSoal = db.prepare("SELECT COUNT(*) AS total FROM soal").get();
 
 if (jumlahSoal.total === 0) {
@@ -47,7 +47,6 @@ if (jumlahSoal.total === 0) {
     });
 
     migrasi(dataLama);
-
     console.log(`Migrasi berhasil: ${dataLama.length} soal dipindahkan.`);
   } else {
     console.log("File soal.json tidak ditemukan.");
@@ -63,8 +62,7 @@ console.log("Isi tabel soal di SQLite:");
 console.table(dataSQLite);
 console.log("Total soal di SQLite:", dataSQLite.length);
 
-// QUERY: harus diletakkan setelah express.json()
-// dan sebelum route GET /soal
+// Endpoint QUERY untuk pencarian soal
 app.use((req, res, next) => {
   if (req.method !== "QUERY" || req.path !== "/soal") {
     return next();
@@ -110,7 +108,7 @@ app.get("/soal", (req, res) => {
   res.status(200).json(hasil);
 });
 
-// GET soal berdasarkan ID
+// GET soal berdasarkan ID — menggunakan parameterized query
 app.get("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
 
@@ -234,7 +232,6 @@ app.put("/soal/:id", (req, res) => {
   ).run(pertanyaanBaru, JSON.stringify(jawabanBaru), jawabanBenarBaru, id);
 
   const dataBaru = db.prepare("SELECT * FROM soal WHERE id = ?").get(id);
-
   dataBaru.jawaban = JSON.parse(dataBaru.jawaban);
 
   res.status(200).json({
@@ -262,7 +259,6 @@ app.delete("/soal/:id", (req, res) => {
   }
 
   db.prepare("DELETE FROM soal WHERE id = ?").run(id);
-
   data.jawaban = JSON.parse(data.jawaban);
 
   res.status(200).json({
