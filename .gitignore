@@ -19,3 +19,11 @@ build/
 .DS_Store
 Thumbs.db
 .vscode/
+
+node_modules/
+.env
+
+# File yang tidak ingin diunggah ke Git
+post.json
+query.json
+SELECT.sql
