@@ -13,7 +13,14 @@ const fileSoal = path.join(__dirname, "soal.json");
 
 const db = new Database(fileDB);
 
-// Membuat tabel jika belum ada
+// Mengaktifkan foreign key
+db.pragma("foreign_keys = ON");
+
+// ======================================
+// MIGRASI DATABASE
+// ======================================
+
+// Membuat tabel soal jika belum ada
 db.exec(`
   CREATE TABLE IF NOT EXISTS soal (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,46 +30,138 @@ db.exec(`
   )
 `);
 
-// Migrasi data dari soal.json jika tabel masih kosong
+// Migrasi data dari soal.json jika tabel kosong
 const jumlahSoal = db.prepare("SELECT COUNT(*) AS total FROM soal").get();
 
-if (jumlahSoal.total === 0) {
-  if (fs.existsSync(fileSoal)) {
-    const dataLama = JSON.parse(fs.readFileSync(fileSoal, "utf8"));
+if (jumlahSoal.total === 0 && fs.existsSync(fileSoal)) {
+  const dataLama = JSON.parse(fs.readFileSync(fileSoal, "utf8"));
 
-    const insertSoal = db.prepare(`
-      INSERT INTO soal (id, pertanyaan, jawaban, jawabanBenar)
-      VALUES (?, ?, ?, ?)
-    `);
+  const insertSoal = db.prepare(`
+    INSERT INTO soal (id, pertanyaan, jawaban, jawabanBenar)
+    VALUES (?, ?, ?, ?)
+  `);
 
-    const migrasi = db.transaction((data) => {
-      for (const item of data) {
-        insertSoal.run(
-          item.id,
-          item.pertanyaan,
-          JSON.stringify(item.jawaban),
-          item.jawabanBenar,
-        );
-      }
-    });
+  const migrasi = db.transaction((data) => {
+    for (const item of data) {
+      insertSoal.run(
+        item.id,
+        item.pertanyaan,
+        JSON.stringify(item.jawaban),
+        item.jawabanBenar,
+      );
+    }
+  });
 
-    migrasi(dataLama);
-    console.log(`Migrasi berhasil: ${dataLama.length} soal dipindahkan.`);
-  } else {
-    console.log("File soal.json tidak ditemukan.");
-  }
-} else {
-  console.log(`Migrasi dilewati: tabel sudah berisi ${jumlahSoal.total} soal.`);
+  migrasi(dataLama);
+
+  console.log(`Migrasi berhasil: ${dataLama.length} soal dipindahkan.`);
 }
 
-// Verifikasi isi database
-const dataSQLite = db.prepare("SELECT * FROM soal ORDER BY id").all();
+// Membuat tabel kategori
+db.exec(`
+  CREATE TABLE IF NOT EXISTS kategori (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nama TEXT NOT NULL UNIQUE
+  )
+`);
 
-console.log("Isi tabel soal di SQLite:");
-console.table(dataSQLite);
-console.log("Total soal di SQLite:", dataSQLite.length);
+// Menambahkan kategori awal
+const insertKategori = db.prepare(`
+  INSERT OR IGNORE INTO kategori (nama)
+  VALUES (?)
+`);
 
-// Endpoint QUERY untuk pencarian soal
+insertKategori.run("Umum");
+insertKategori.run("Komputer");
+insertKategori.run("Matematika");
+
+// Mengambil ID kategori
+const kategoriUmum = db
+  .prepare(
+    `
+  SELECT id FROM kategori WHERE nama = ?
+`,
+  )
+  .get("Umum").id;
+
+const kategoriKomputer = db
+  .prepare(
+    `
+  SELECT id FROM kategori WHERE nama = ?
+`,
+  )
+  .get("Komputer").id;
+
+const kategoriMatematika = db
+  .prepare(
+    `
+  SELECT id FROM kategori WHERE nama = ?
+`,
+  )
+  .get("Matematika").id;
+
+// Mengecek apakah kategori_id sudah ada
+const columns = db.pragma("table_info(soal)");
+
+const hasKategoriId = columns.some((column) => column.name === "kategori_id");
+
+// Menambahkan kolom kategori_id jika belum ada
+if (!hasKategoriId) {
+  db.exec(`
+    ALTER TABLE soal
+    ADD COLUMN kategori_id INTEGER
+    REFERENCES kategori(id)
+  `);
+
+  console.log("Kolom kategori_id berhasil ditambahkan.");
+}
+
+// Mengisi kategori soal lama yang masih NULL
+const updateKategori = db.prepare(`
+  UPDATE soal
+  SET kategori_id = ?
+  WHERE kategori_id IS NULL
+`);
+
+updateKategori.run(kategoriUmum);
+
+// Memindahkan soal matematika lama ke kategori Matematika
+db.prepare(
+  `
+  UPDATE soal
+  SET kategori_id = ?
+  WHERE pertanyaan LIKE '%2 + 2%'
+`,
+).run(kategoriMatematika);
+
+// ======================================
+// HELPER
+// ======================================
+
+// Mengambil soal beserta nama kategorinya
+const querySoal = `
+  SELECT
+    soal.*,
+    kategori.nama AS kategori
+  FROM soal
+  JOIN kategori
+    ON soal.kategori_id = kategori.id
+`;
+
+// Mengubah jawaban dari JSON string menjadi array
+function formatSoal(item) {
+  if (!item) return null;
+
+  return {
+    ...item,
+    jawaban: JSON.parse(item.jawaban),
+  };
+}
+
+// ======================================
+// ENDPOINT QUERY
+// ======================================
+
 app.use((req, res, next) => {
   if (req.method !== "QUERY" || req.path !== "/soal") {
     return next();
@@ -79,36 +178,58 @@ app.use((req, res, next) => {
   const hasil = db
     .prepare(
       `
-      SELECT * FROM soal
-      WHERE LOWER(pertanyaan) LIKE ?
-      ORDER BY id
-    `,
+    ${querySoal}
+    WHERE LOWER(soal.pertanyaan) LIKE ?
+    ORDER BY soal.id
+  `,
     )
-    .all(`%${cari.trim().toLowerCase()}%`)
-    .map((item) => ({
-      ...item,
-      jawaban: JSON.parse(item.jawaban),
-    }));
+    .all(`%${cari.trim().toLowerCase()}%`);
+
+  const data = hasil.map(formatSoal);
 
   return res.status(200).json({
-    total: hasil.length,
-    data: hasil,
+    total: data.length,
+    data,
   });
 });
 
-// GET semua soal
+// ======================================
+// GET SEMUA SOAL + FILTER KATEGORI
+// ======================================
+
 app.get("/soal", (req, res) => {
-  const daftarSoal = db.prepare("SELECT * FROM soal ORDER BY id").all();
+  const { kategori } = req.query;
 
-  const hasil = daftarSoal.map((item) => ({
-    ...item,
-    jawaban: JSON.parse(item.jawaban),
-  }));
+  let hasil;
 
-  res.status(200).json(hasil);
+  if (kategori) {
+    hasil = db
+      .prepare(
+        `
+      ${querySoal}
+      WHERE LOWER(kategori.nama) = LOWER(?)
+      ORDER BY soal.id
+    `,
+      )
+      .all(kategori);
+  } else {
+    hasil = db
+      .prepare(
+        `
+      ${querySoal}
+      ORDER BY soal.id
+    `,
+      )
+      .all();
+  }
+
+  res.status(200).json(hasil.map(formatSoal));
 });
 
-// GET soal berdasarkan ID — menggunakan parameterized query
+// ======================================
+// GET SOAL BERDASARKAN ID
+// ======================================
+
 app.get("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
 
@@ -118,7 +239,14 @@ app.get("/soal/:id", (req, res) => {
     });
   }
 
-  const data = db.prepare("SELECT * FROM soal WHERE id = ?").get(id);
+  const data = db
+    .prepare(
+      `
+    ${querySoal}
+    WHERE soal.id = ?
+  `,
+    )
+    .get(id);
 
   if (!data) {
     return res.status(404).json({
@@ -126,15 +254,17 @@ app.get("/soal/:id", (req, res) => {
     });
   }
 
-  data.jawaban = JSON.parse(data.jawaban);
-
-  res.status(200).json(data);
+  res.status(200).json(formatSoal(data));
 });
 
-// POST tambah soal
-app.post("/soal", (req, res) => {
-  const { pertanyaan, jawaban, jawabanBenar } = req.body;
+// ======================================
+// POST TAMBAH SOAL
+// ======================================
 
+app.post("/soal", (req, res) => {
+  const { pertanyaan, jawaban, jawabanBenar, kategori_id } = req.body;
+
+  // Validasi data soal
   if (
     typeof pertanyaan !== "string" ||
     !pertanyaan.trim() ||
@@ -149,31 +279,70 @@ app.post("/soal", (req, res) => {
     });
   }
 
+  // Validasi jawaban benar
   if (!jawaban.includes(jawabanBenar.trim())) {
     return res.status(400).json({
       pesan: "jawabanBenar harus ada di dalam pilihan jawaban",
     });
   }
 
+  // Validasi kategori_id
+  if (!Number.isInteger(kategori_id) || kategori_id <= 0) {
+    return res.status(400).json({
+      pesan: "kategori_id wajib berupa angka yang valid",
+    });
+  }
+
+  const kategori = db
+    .prepare(
+      `
+    SELECT id FROM kategori WHERE id = ?
+  `,
+    )
+    .get(kategori_id);
+
+  if (!kategori) {
+    return res.status(400).json({
+      pesan: "Kategori tidak ditemukan",
+    });
+  }
+
+  // Menyimpan soal
   const hasil = db
     .prepare(
       `
-      INSERT INTO soal (pertanyaan, jawaban, jawabanBenar)
-      VALUES (?, ?, ?)
-    `,
+    INSERT INTO soal (
+      pertanyaan,
+      jawaban,
+      jawabanBenar,
+      kategori_id
     )
-    .run(pertanyaan.trim(), JSON.stringify(jawaban), jawabanBenar.trim());
+    VALUES (?, ?, ?, ?)
+  `,
+    )
+    .run(
+      pertanyaan.trim(),
+      JSON.stringify(jawaban),
+      jawabanBenar.trim(),
+      kategori_id,
+    );
 
   const soalBaru = db
-    .prepare("SELECT * FROM soal WHERE id = ?")
+    .prepare(
+      `
+    ${querySoal}
+    WHERE soal.id = ?
+  `,
+    )
     .get(hasil.lastInsertRowid);
 
-  soalBaru.jawaban = JSON.parse(soalBaru.jawaban);
-
-  res.status(201).json(soalBaru);
+  res.status(201).json(formatSoal(soalBaru));
 });
 
-// PUT ubah soal berdasarkan ID
+// ======================================
+// PUT UBAH SOAL
+// ======================================
+
 app.put("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
 
@@ -183,7 +352,13 @@ app.put("/soal/:id", (req, res) => {
     });
   }
 
-  const dataLama = db.prepare("SELECT * FROM soal WHERE id = ?").get(id);
+  const dataLama = db
+    .prepare(
+      `
+    SELECT * FROM soal WHERE id = ?
+  `,
+    )
+    .get(id);
 
   if (!dataLama) {
     return res.status(404).json({
@@ -191,8 +366,9 @@ app.put("/soal/:id", (req, res) => {
     });
   }
 
-  const { pertanyaan, jawaban, jawabanBenar } = req.body;
+  const { pertanyaan, jawaban, jawabanBenar, kategori_id } = req.body;
 
+  // Validasi input
   if (
     (pertanyaan !== undefined &&
       (typeof pertanyaan !== "string" || !pertanyaan.trim())) ||
@@ -217,30 +393,73 @@ app.put("/soal/:id", (req, res) => {
   const jawabanBenarBaru =
     jawabanBenar !== undefined ? jawabanBenar.trim() : dataLama.jawabanBenar;
 
+  const kategoriBaru =
+    kategori_id !== undefined ? kategori_id : dataLama.kategori_id;
+
   if (!jawabanBaru.includes(jawabanBenarBaru)) {
     return res.status(400).json({
       pesan: "jawabanBenar harus ada di dalam pilihan jawaban",
     });
   }
 
+  // Validasi kategori jika diubah
+  if (!Number.isInteger(kategoriBaru) || kategoriBaru <= 0) {
+    return res.status(400).json({
+      pesan: "kategori_id tidak valid",
+    });
+  }
+
+  const kategori = db
+    .prepare(
+      `
+    SELECT id FROM kategori WHERE id = ?
+  `,
+    )
+    .get(kategoriBaru);
+
+  if (!kategori) {
+    return res.status(400).json({
+      pesan: "Kategori tidak ditemukan",
+    });
+  }
+
   db.prepare(
     `
     UPDATE soal
-    SET pertanyaan = ?, jawaban = ?, jawabanBenar = ?
+    SET
+      pertanyaan = ?,
+      jawaban = ?,
+      jawabanBenar = ?,
+      kategori_id = ?
     WHERE id = ?
   `,
-  ).run(pertanyaanBaru, JSON.stringify(jawabanBaru), jawabanBenarBaru, id);
+  ).run(
+    pertanyaanBaru,
+    JSON.stringify(jawabanBaru),
+    jawabanBenarBaru,
+    kategoriBaru,
+    id,
+  );
 
-  const dataBaru = db.prepare("SELECT * FROM soal WHERE id = ?").get(id);
-  dataBaru.jawaban = JSON.parse(dataBaru.jawaban);
+  const dataBaru = db
+    .prepare(
+      `
+    ${querySoal}
+    WHERE soal.id = ?
+  `,
+    )
+    .get(id);
 
   res.status(200).json({
     pesan: "Soal berhasil diubah",
-    data: dataBaru,
+    data: formatSoal(dataBaru),
   });
 });
 
-// DELETE hapus soal berdasarkan ID
+// ======================================
+// DELETE SOAL
+// ======================================
+
 app.delete("/soal/:id", (req, res) => {
   const id = Number(req.params.id);
 
@@ -250,7 +469,14 @@ app.delete("/soal/:id", (req, res) => {
     });
   }
 
-  const data = db.prepare("SELECT * FROM soal WHERE id = ?").get(id);
+  const data = db
+    .prepare(
+      `
+    ${querySoal}
+    WHERE soal.id = ?
+  `,
+    )
+    .get(id);
 
   if (!data) {
     return res.status(404).json({
@@ -258,14 +484,21 @@ app.delete("/soal/:id", (req, res) => {
     });
   }
 
-  db.prepare("DELETE FROM soal WHERE id = ?").run(id);
-  data.jawaban = JSON.parse(data.jawaban);
+  db.prepare(
+    `
+    DELETE FROM soal WHERE id = ?
+  `,
+  ).run(id);
 
   res.status(200).json({
     pesan: "Soal berhasil dihapus",
-    data,
+    data: formatSoal(data),
   });
 });
+
+// ======================================
+// MENJALANKAN SERVER
+// ======================================
 
 app.listen(PORT, () => {
   console.log(`Server berjalan di http://localhost:${PORT}`);
