@@ -27,3 +27,7 @@ node_modules/
 post.json
 query.json
 SELECT.sql
+
+# Testing payload
+payload.json
+post-invalid.json
