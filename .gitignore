@@ -31,3 +31,16 @@ SELECT.sql
 # Testing payload
 payload.json
 post-invalid.json
+
+# Dependencies
+node_modules/
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Backup
+*.backup
+*.bak
