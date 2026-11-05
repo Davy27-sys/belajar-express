@@ -10,10 +10,10 @@ app.use(express.json());
 
 const fileDB = path.join(__dirname, "soal.db");
 const fileSoal = path.join(__dirname, "soal.json");
-console.log("Database yang digunakan:", fileDB);;
+
+console.log("Database yang digunakan:", fileDB);
 
 const db = new Database(fileDB);
-
 db.pragma("foreign_keys = ON");
 
 // ======================================
@@ -31,21 +31,22 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS soal (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pertanyaan TEXT NOT NULL,
-    jawaban TEXT NOT NULL,
-    jawabanBenar TEXT NOT NULL
+    kategori_id INTEGER REFERENCES kategori(id)
   )
 `);
 
-const columns = db.pragma("table_info(soal)");
-const hasKategoriId = columns.some((column) => column.name === "kategori_id");
+// Tambahkan kategori_id jika database lama belum memilikinya
+const kolomSoal = db.pragma("table_info(soal)");
+const punyaKategoriId = kolomSoal.some((kolom) => kolom.name === "kategori_id");
 
-if (!hasKategoriId) {
+if (!punyaKategoriId) {
   db.exec(`
     ALTER TABLE soal
     ADD COLUMN kategori_id INTEGER REFERENCES kategori(id)
   `);
 }
 
+// Buat tabel opsi
 db.exec(`
   CREATE TABLE IF NOT EXISTS opsi_jawaban (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +59,7 @@ db.exec(`
   )
 `);
 
+// Buat kategori awal
 const insertKategori = db.prepare(`
   INSERT OR IGNORE INTO kategori (nama) VALUES (?)
 `);
@@ -74,45 +76,142 @@ const kategoriMatematika = db
   .prepare("SELECT id FROM kategori WHERE nama = ?")
   .get("Matematika").id;
 
+// ======================================
+// MIGRASI JAWABAN DATABASE LAMA
+// ======================================
+
+const kolomLama = db.pragma("table_info(soal)");
+
+const punyaJawabanLama = kolomLama.some((kolom) => kolom.name === "jawaban");
+
+const punyaJawabanBenarLama = kolomLama.some(
+  (kolom) => kolom.name === "jawabanBenar",
+);
+
+if (punyaJawabanLama !== punyaJawabanBenarLama) {
+  throw new Error(
+    "Struktur database lama tidak lengkap: kolom jawaban harus tersedia berpasangan.",
+  );
+}
+
+if (punyaJawabanLama && punyaJawabanBenarLama) {
+  const migrasiJawaban = db.transaction(() => {
+    const soalLama = db
+      .prepare(
+        `
+      SELECT id, jawaban, jawabanBenar
+      FROM soal
+      ORDER BY id
+    `,
+      )
+      .all();
+
+    const cekOpsi = db.prepare(`
+      SELECT COUNT(*) AS total
+      FROM opsi_jawaban
+      WHERE soal_id = ?
+    `);
+
+    const insertOpsi = db.prepare(`
+      INSERT INTO opsi_jawaban
+      (soal_id, teks_opsi, benar)
+      VALUES (?, ?, ?)
+    `);
+
+    for (const item of soalLama) {
+      // Lewati soal yang opsinya sudah pernah dimigrasikan
+      if (cekOpsi.get(item.id).total > 0) {
+        continue;
+      }
+
+      let pilihan;
+
+      try {
+        pilihan = JSON.parse(item.jawaban);
+      } catch {
+        throw new Error(`JSON jawaban soal ID ${item.id} tidak valid.`);
+      }
+
+      if (
+        !Array.isArray(pilihan) ||
+        pilihan.length === 0 ||
+        !pilihan.every((opsi) => typeof opsi === "string" && opsi.trim()) ||
+        !pilihan.includes(item.jawabanBenar)
+      ) {
+        throw new Error(`Data jawaban soal ID ${item.id} tidak valid.`);
+      }
+
+      for (const opsi of pilihan) {
+        insertOpsi.run(
+          item.id,
+          opsi.trim(),
+          opsi === item.jawabanBenar ? 1 : 0,
+        );
+      }
+    }
+
+    // Hapus sumber jawaban lama setelah migrasi berhasil
+    db.exec(`
+      ALTER TABLE soal DROP COLUMN jawaban;
+      ALTER TABLE soal DROP COLUMN jawabanBenar;
+    `);
+  });
+
+  migrasiJawaban();
+  console.log("Migrasi jawaban lama berhasil.");
+} else {
+  console.log("Kolom jawaban lama tidak ditemukan. Migrasi dilewati.");
+}
+
+// Isi kategori untuk soal lama yang belum memiliki kategori
 db.prepare(
   `
-  UPDATE soal SET kategori_id = ?
+  UPDATE soal
+  SET kategori_id = ?
   WHERE kategori_id IS NULL
 `,
 ).run(kategoriUmum);
 
 db.prepare(
   `
-  UPDATE soal SET kategori_id = ?
+  UPDATE soal
+  SET kategori_id = ?
   WHERE pertanyaan LIKE '%2 + 2%'
 `,
 ).run(kategoriMatematika);
 
-// Migrasi dari soal.json jika tabel soal kosong
-const jumlahSoal = db.prepare("SELECT COUNT(*) AS total FROM soal").get();
+// ======================================
+// MIGRASI DARI SOAL.JSON
+// ======================================
 
-if (jumlahSoal.total === 0 && fs.existsSync(fileSoal)) {
+const jumlahSoal = db.prepare("SELECT COUNT(*) AS total FROM soal").get().total;
+
+if (jumlahSoal === 0 && fs.existsSync(fileSoal)) {
   const dataLama = JSON.parse(fs.readFileSync(fileSoal, "utf8"));
+
+  if (!Array.isArray(dataLama)) {
+    throw new Error("Format soal.json tidak valid.");
+  }
 
   const migrasiJSON = db.transaction(() => {
     for (const item of dataLama) {
-      const pilihan = item.jawaban;
+      if (
+        !Array.isArray(item.jawaban) ||
+        !item.jawaban.includes(item.jawabanBenar)
+      ) {
+        throw new Error(
+          `Pilihan jawaban soal "${item.pertanyaan}" tidak valid.`,
+        );
+      }
 
       const hasil = db
         .prepare(
           `
-        INSERT INTO soal
-        (id, pertanyaan, jawaban, jawabanBenar, kategori_id)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO soal (id, pertanyaan, kategori_id)
+        VALUES (?, ?, ?)
       `,
         )
-        .run(
-          item.id,
-          item.pertanyaan,
-          JSON.stringify(pilihan),
-          item.jawabanBenar,
-          kategoriUmum,
-        );
+        .run(item.id, item.pertanyaan, kategoriUmum);
 
       const insertOpsi = db.prepare(`
         INSERT INTO opsi_jawaban
@@ -120,7 +219,7 @@ if (jumlahSoal.total === 0 && fs.existsSync(fileSoal)) {
         VALUES (?, ?, ?)
       `);
 
-      for (const opsi of pilihan) {
+      for (const opsi of item.jawaban) {
         insertOpsi.run(
           hasil.lastInsertRowid,
           opsi,
@@ -131,6 +230,7 @@ if (jumlahSoal.total === 0 && fs.existsSync(fileSoal)) {
   });
 
   migrasiJSON();
+  console.log("Migrasi dari soal.json berhasil.");
 }
 
 // ======================================
@@ -151,7 +251,7 @@ function formatSoal(item) {
   const opsi = db
     .prepare(
       `
-    SELECT id, teks_opsi, benar
+    SELECT teks_opsi, benar
     FROM opsi_jawaban
     WHERE soal_id = ?
     ORDER BY id
@@ -160,10 +260,12 @@ function formatSoal(item) {
     .all(item.id);
 
   return {
-    ...item,
+    id: item.id,
+    pertanyaan: item.pertanyaan,
+    kategori_id: item.kategori_id,
+    kategori: item.kategori,
     jawaban: opsi.map((o) => o.teks_opsi),
     jawabanBenar: opsi.find((o) => o.benar === 1)?.teks_opsi ?? null,
-    opsi_jawaban: opsi,
   };
 }
 
@@ -317,12 +419,11 @@ app.post("/soal", (req, res) => {
       const hasil = db
         .prepare(
           `
-        INSERT INTO soal
-        (pertanyaan, jawaban, jawabanBenar, kategori_id)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO soal (pertanyaan, kategori_id)
+        VALUES (?, ?)
       `,
         )
-        .run(pertanyaan.trim(), JSON.stringify(pilihan), benar, kategori_id);
+        .run(pertanyaan.trim(), kategori_id);
 
       const soalId = Number(hasil.lastInsertRowid);
 
@@ -432,22 +533,15 @@ app.put("/soal/:id", (req, res) => {
         `
         UPDATE soal
         SET pertanyaan = ?,
-            jawaban = ?,
-            jawabanBenar = ?,
             kategori_id = ?
         WHERE id = ?
       `,
-      ).run(
-        pertanyaanBaru.trim(),
-        JSON.stringify(pilihan),
-        benar,
-        kategoriBaru,
-        id,
-      );
+      ).run(pertanyaanBaru.trim(), kategoriBaru, id);
 
       db.prepare(
         `
-        DELETE FROM opsi_jawaban WHERE soal_id = ?
+        DELETE FROM opsi_jawaban
+        WHERE soal_id = ?
       `,
       ).run(id);
 
@@ -513,11 +607,14 @@ app.delete("/soal/:id", (req, res) => {
     });
   }
 
+  // Format data sebelum dihapus agar opsi tidak hilang
+  const dataTerhapus = formatSoal(data);
+
   db.prepare("DELETE FROM soal WHERE id = ?").run(id);
 
   res.status(200).json({
     pesan: "Soal berhasil dihapus",
-    data: formatSoal(data),
+    data: dataTerhapus,
   });
 });
 
