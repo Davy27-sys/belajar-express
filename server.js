@@ -164,6 +164,18 @@ if (punyaJawabanLama && punyaJawabanBenarLama) {
 }
 
 // Isi kategori untuk soal lama yang belum memiliki kategori
+
+// Prioritaskan soal matematika yang kategorinya masih kosong
+db.prepare(
+  `
+  UPDATE soal
+  SET kategori_id = ?
+  WHERE kategori_id IS NULL
+  AND pertanyaan LIKE '%2 + 2%'
+`,
+).run(kategoriMatematika);
+
+// Soal lainnya yang kategorinya masih kosong diberi kategori Umum
 db.prepare(
   `
   UPDATE soal
@@ -171,14 +183,6 @@ db.prepare(
   WHERE kategori_id IS NULL
 `,
 ).run(kategoriUmum);
-
-db.prepare(
-  `
-  UPDATE soal
-  SET kategori_id = ?
-  WHERE pertanyaan LIKE '%2 + 2%'
-`,
-).run(kategoriMatematika);
 
 // ======================================
 // MIGRASI DARI SOAL.JSON
