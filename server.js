@@ -59,6 +59,46 @@ db.exec(`
   )
 `);
 
+// ======================================
+// MIGRASI RIWAYAT KUIS
+// ======================================
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS riwayat_kuis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nama_pemain TEXT NOT NULL,
+    tanggal TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    kategori_id INTEGER NOT NULL,
+    nilai INTEGER NOT NULL,
+    jumlah_soal INTEGER NOT NULL,
+
+    FOREIGN KEY (kategori_id)
+      REFERENCES kategori(id)
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS detail_riwayat (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    riwayat_id INTEGER NOT NULL,
+    soal_id INTEGER NOT NULL,
+    opsi_id INTEGER NOT NULL,
+    benar INTEGER NOT NULL DEFAULT 0,
+
+    FOREIGN KEY (riwayat_id)
+      REFERENCES riwayat_kuis(id)
+      ON DELETE CASCADE,
+
+    FOREIGN KEY (soal_id)
+      REFERENCES soal(id),
+
+    FOREIGN KEY (opsi_id)
+      REFERENCES opsi_jawaban(id)
+  )
+`);
+
+console.log("Migrasi tabel riwayat berhasil.");
+
 // Buat kategori awal
 const insertKategori = db.prepare(`
   INSERT OR IGNORE INTO kategori (nama) VALUES (?)
@@ -619,6 +659,296 @@ app.delete("/soal/:id", (req, res) => {
   res.status(200).json({
     pesan: "Soal berhasil dihapus",
     data: dataTerhapus,
+  });
+});
+
+// ======================================
+// POST RIWAYAT KUIS
+// ======================================
+
+app.post("/riwayat", (req, res) => {
+  const { nama_pemain, kategori_id, jawaban } = req.body;
+
+  // Validasi nama pemain
+  if (typeof nama_pemain !== "string" || !nama_pemain.trim()) {
+    return res.status(400).json({
+      pesan: "Nama pemain tidak boleh kosong",
+    });
+  }
+
+  // Validasi kategori
+  if (!kategoriAda(kategori_id)) {
+    return res.status(400).json({
+      pesan: "Kategori tidak ditemukan atau tidak valid",
+    });
+  }
+
+  // Validasi daftar jawaban
+  if (!Array.isArray(jawaban) || jawaban.length === 0) {
+    return res.status(400).json({
+      pesan: "Daftar jawaban tidak boleh kosong",
+    });
+  }
+
+  // Validasi setiap soal dan opsi yang dipilih
+  const dataJawaban = [];
+
+  for (const item of jawaban) {
+    if (
+      !item ||
+      !Number.isInteger(item.soal_id) ||
+      item.soal_id <= 0 ||
+      !Number.isInteger(item.opsi_id) ||
+      item.opsi_id <= 0
+    ) {
+      return res.status(400).json({
+        pesan: "Data soal atau opsi tidak valid",
+      });
+    }
+
+    const soal = db
+      .prepare("SELECT id FROM soal WHERE id = ?")
+      .get(item.soal_id);
+
+    if (!soal) {
+      return res.status(400).json({
+        pesan: `Soal ID ${item.soal_id} tidak ditemukan`,
+      });
+    }
+
+    const opsi = db
+      .prepare(
+        `
+        SELECT id, benar
+        FROM opsi_jawaban
+        WHERE id = ? AND soal_id = ?
+      `,
+      )
+      .get(item.opsi_id, item.soal_id);
+
+    if (!opsi) {
+      return res.status(400).json({
+        pesan: `Opsi tidak valid untuk soal ID ${item.soal_id}`,
+      });
+    }
+
+    dataJawaban.push({
+      soal_id: item.soal_id,
+      opsi_id: item.opsi_id,
+      benar: opsi.benar === 1 ? 1 : 0,
+    });
+  }
+
+  // Cegah soal yang sama dijawab lebih dari satu kali
+  const daftarSoal = dataJawaban.map((item) => item.soal_id);
+
+  if (new Set(daftarSoal).size !== daftarSoal.length) {
+    return res.status(400).json({
+      pesan: "Soal tidak boleh dijawab lebih dari satu kali",
+    });
+  }
+
+  // Hitung nilai berdasarkan jawaban yang benar
+  const jumlahSoal = dataJawaban.length;
+  const jumlahBenar = dataJawaban.filter((item) => item.benar === 1).length;
+
+  const nilai = Math.round((jumlahBenar / jumlahSoal) * 100);
+
+  try {
+    // Simpan riwayat dan detail secara atomik
+    const simpanRiwayat = db.transaction(() => {
+      const hasil = db
+        .prepare(
+          `
+          INSERT INTO riwayat_kuis
+          (nama_pemain, kategori_id, nilai, jumlah_soal)
+          VALUES (?, ?, ?, ?)
+        `,
+        )
+        .run(nama_pemain.trim(), kategori_id, nilai, jumlahSoal);
+
+      const riwayatId = Number(hasil.lastInsertRowid);
+
+      const insertDetail = db.prepare(`
+        INSERT INTO detail_riwayat
+        (riwayat_id, soal_id, opsi_id, benar)
+        VALUES (?, ?, ?, ?)
+      `);
+
+      for (const item of dataJawaban) {
+        insertDetail.run(riwayatId, item.soal_id, item.opsi_id, item.benar);
+      }
+
+      return riwayatId;
+    });
+
+    const riwayatId = simpanRiwayat();
+
+    // Ambil kembali data yang sudah disimpan
+    const data = db
+      .prepare(
+        `
+        SELECT
+          r.id,
+          r.nama_pemain,
+          r.tanggal,
+          r.kategori_id,
+          k.nama AS kategori,
+          r.nilai,
+          r.jumlah_soal
+        FROM riwayat_kuis r
+        JOIN kategori k ON r.kategori_id = k.id
+        WHERE r.id = ?
+      `,
+      )
+      .get(riwayatId);
+
+    res.status(201).json({
+      pesan: "Riwayat kuis berhasil disimpan",
+      data: {
+        ...data,
+        jumlah_benar: jumlahBenar,
+        jumlah_salah: jumlahSoal - jumlahBenar,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      pesan: "Gagal menyimpan riwayat kuis",
+      error: error.message,
+    });
+  }
+});
+
+// ======================================
+// GET DETAIL RIWAYAT KUIS
+// ======================================
+
+app.get("/riwayat/:id", (req, res) => {
+  const id = Number(req.params.id);
+
+  // Validasi ID
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({
+      pesan: "ID riwayat tidak valid",
+    });
+  }
+
+  // Ambil data utama riwayat
+  const riwayat = db
+    .prepare(
+      `
+      SELECT
+        r.id,
+        r.nama_pemain,
+        r.tanggal,
+        r.kategori_id,
+        k.nama AS kategori,
+        r.nilai,
+        r.jumlah_soal
+      FROM riwayat_kuis r
+      JOIN kategori k ON r.kategori_id = k.id
+      WHERE r.id = ?
+    `,
+    )
+    .get(id);
+
+  if (!riwayat) {
+    return res.status(404).json({
+      pesan: "Riwayat kuis tidak ditemukan",
+    });
+  }
+
+  // Ambil detail jawaban
+  const detail = db
+    .prepare(
+      `
+      SELECT
+        d.soal_id,
+        s.pertanyaan,
+        d.opsi_id,
+        o.teks_opsi AS jawaban_dipilih,
+        d.benar,
+        CASE
+          WHEN d.benar = 1 THEN 'Benar'
+          ELSE 'Salah'
+        END AS status
+      FROM detail_riwayat d
+      JOIN soal s ON d.soal_id = s.id
+      JOIN opsi_jawaban o ON d.opsi_id = o.id
+      WHERE d.riwayat_id = ?
+      ORDER BY d.id
+    `,
+    )
+    .all(id);
+
+  res.status(200).json({
+    data: {
+      ...riwayat,
+      detail,
+    },
+  });
+});
+
+// ======================================
+// GET SEMUA RIWAYAT KUIS
+// ======================================
+
+app.get("/riwayat", (req, res) => {
+  const pemain = req.query.pemain;
+
+  // Jika filter pemain digunakan
+  if (pemain !== undefined) {
+    if (typeof pemain !== "string" || !pemain.trim()) {
+      return res.status(400).json({
+        pesan: "Filter nama pemain tidak valid",
+      });
+    }
+
+    const data = db
+      .prepare(
+        `
+        SELECT
+          r.id,
+          r.nama_pemain,
+          r.tanggal,
+          k.nama AS kategori,
+          r.nilai,
+          r.jumlah_soal
+        FROM riwayat_kuis r
+        JOIN kategori k ON r.kategori_id = k.id
+        WHERE LOWER(r.nama_pemain) LIKE LOWER(?)
+        ORDER BY r.id DESC
+      `,
+      )
+      .all(`%${pemain.trim()}%`);
+
+    return res.status(200).json({
+      jumlah: data.length,
+      data,
+    });
+  }
+
+  // Jika tidak menggunakan filter
+  const data = db
+    .prepare(
+      `
+      SELECT
+        r.id,
+        r.nama_pemain,
+        r.tanggal,
+        k.nama AS kategori,
+        r.nilai,
+        r.jumlah_soal
+      FROM riwayat_kuis r
+      JOIN kategori k ON r.kategori_id = k.id
+      ORDER BY r.id DESC
+    `,
+    )
+    .all();
+
+  res.status(200).json({
+    jumlah: data.length,
+    data,
   });
 });
 
