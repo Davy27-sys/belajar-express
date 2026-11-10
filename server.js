@@ -707,12 +707,18 @@ app.post("/riwayat", (req, res) => {
     }
 
     const soal = db
-      .prepare("SELECT id FROM soal WHERE id = ?")
+      .prepare("SELECT id, kategori_id FROM soal WHERE id = ?")
       .get(item.soal_id);
 
     if (!soal) {
       return res.status(400).json({
         pesan: `Soal ID ${item.soal_id} tidak ditemukan`,
+      });
+    }
+
+    if (Number(soal.kategori_id) !== Number(kategori_id)) {
+      return res.status(400).json({
+        pesan: `Soal ID ${item.soal_id} tidak sesuai dengan kategori sesi`,
       });
     }
 
@@ -916,11 +922,11 @@ app.get("/riwayat", (req, res) => {
           r.jumlah_soal
         FROM riwayat_kuis r
         JOIN kategori k ON r.kategori_id = k.id
-        WHERE LOWER(r.nama_pemain) LIKE LOWER(?)
+        WHERE LOWER(r.nama_pemain) = LOWER(?)
         ORDER BY r.id DESC
       `,
       )
-      .all(`%${pemain.trim()}%`);
+      .all(pemain.trim());
 
     return res.status(200).json({
       jumlah: data.length,
