@@ -525,16 +525,34 @@ app.put("/soal/:id", (req, res) => {
     });
   }
 
+  // Tolak perubahan jika soal sudah memiliki riwayat
+  const punyaRiwayat = db
+    .prepare(
+      `
+      SELECT id
+      FROM detail_riwayat
+      WHERE soal_id = ?
+      LIMIT 1
+    `,
+    )
+    .get(id);
+
+  if (punyaRiwayat) {
+    return res.status(400).json({
+      pesan: "Soal tidak dapat diubah karena sudah memiliki riwayat kuis",
+    });
+  }
+
   const { pertanyaan, jawaban, jawabanBenar, kategori_id } = req.body;
 
   const opsiLama = db
     .prepare(
       `
-    SELECT teks_opsi, benar
-    FROM opsi_jawaban
-    WHERE soal_id = ?
-    ORDER BY id
-  `,
+      SELECT teks_opsi, benar
+      FROM opsi_jawaban
+      WHERE soal_id = ?
+      ORDER BY id
+    `,
     )
     .all(id);
 
@@ -605,9 +623,9 @@ app.put("/soal/:id", (req, res) => {
     const dataBaru = db
       .prepare(
         `
-      ${querySoal}
-      WHERE soal.id = ?
-    `,
+        ${querySoal}
+        WHERE soal.id = ?
+      `,
       )
       .get(id);
 
@@ -639,9 +657,9 @@ app.delete("/soal/:id", (req, res) => {
   const data = db
     .prepare(
       `
-    ${querySoal}
-    WHERE soal.id = ?
-  `,
+      ${querySoal}
+      WHERE soal.id = ?
+    `,
     )
     .get(id);
 
@@ -651,15 +669,40 @@ app.delete("/soal/:id", (req, res) => {
     });
   }
 
-  // Format data sebelum dihapus agar opsi tidak hilang
-  const dataTerhapus = formatSoal(data);
+  // Tolak penghapusan jika soal sudah memiliki riwayat
+  const punyaRiwayat = db
+    .prepare(
+      `
+      SELECT id
+      FROM detail_riwayat
+      WHERE soal_id = ?
+      LIMIT 1
+    `,
+    )
+    .get(id);
 
-  db.prepare("DELETE FROM soal WHERE id = ?").run(id);
+  if (punyaRiwayat) {
+    return res.status(400).json({
+      pesan: "Soal tidak dapat dihapus karena sudah memiliki riwayat kuis",
+    });
+  }
 
-  res.status(200).json({
-    pesan: "Soal berhasil dihapus",
-    data: dataTerhapus,
-  });
+  try {
+    // Format data sebelum dihapus
+    const dataTerhapus = formatSoal(data);
+
+    db.prepare("DELETE FROM soal WHERE id = ?").run(id);
+
+    res.status(200).json({
+      pesan: "Soal berhasil dihapus",
+      data: dataTerhapus,
+    });
+  } catch (error) {
+    res.status(500).json({
+      pesan: "Gagal menghapus soal",
+      error: error.message,
+    });
+  }
 });
 
 // ======================================
@@ -957,6 +1000,70 @@ app.get("/riwayat", (req, res) => {
     data,
   });
 });
+
+
+// ======================================
+// GET LEADERBOARD
+// ======================================
+
+app.get("/leaderboard", (req, res) => {
+  const kategori = req.query.kategori;
+
+  // Validasi filter kategori jika digunakan
+  if (kategori !== undefined) {
+    if (typeof kategori !== "string" || !kategori.trim()) {
+      return res.status(400).json({
+        pesan: "Filter kategori tidak valid",
+      });
+    }
+
+    const kategoriDitemukan = db
+      .prepare(
+        `
+        SELECT id
+        FROM kategori
+        WHERE LOWER(nama) = LOWER(?)
+      `,
+      )
+      .get(kategori.trim());
+
+    if (!kategoriDitemukan) {
+      return res.status(404).json({
+        pesan: "Kategori tidak ditemukan",
+      });
+    }
+  }
+
+  // Ambil 5 nilai tertinggi
+  const data = db
+    .prepare(
+      `
+      SELECT
+        r.nama_pemain,
+        k.nama AS kategori,
+        r.nilai,
+        r.tanggal
+      FROM riwayat_kuis r
+      JOIN kategori k ON r.kategori_id = k.id
+      WHERE (? IS NULL OR LOWER(k.nama) = LOWER(?))
+      ORDER BY
+        r.nilai DESC,
+        r.tanggal DESC,
+        r.id DESC
+      LIMIT 5
+    `,
+    )
+    .all(
+      kategori === undefined ? null : kategori.trim(),
+      kategori === undefined ? null : kategori.trim(),
+    );
+
+  res.status(200).json({
+    jumlah: data.length,
+    data,
+  });
+});
+
 
 // ======================================
 // MENJALANKAN SERVER
