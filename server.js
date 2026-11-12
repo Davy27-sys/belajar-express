@@ -46,6 +46,18 @@ if (!punyaKategoriId) {
   `);
 }
 
+// Tambahkan kolom aktif jika belum tersedia
+const kolomSoalAktif = db.pragma("table_info(soal)");
+
+const punyaKolomAktif = kolomSoalAktif.some((kolom) => kolom.name === "aktif");
+
+if (!punyaKolomAktif) {
+  db.exec(`
+    ALTER TABLE soal
+    ADD COLUMN aktif INTEGER NOT NULL DEFAULT 1
+  `);
+}
+
 // Buat tabel opsi
 db.exec(`
   CREATE TABLE IF NOT EXISTS opsi_jawaban (
@@ -139,10 +151,10 @@ if (punyaJawabanLama && punyaJawabanBenarLama) {
     const soalLama = db
       .prepare(
         `
-      SELECT id, jawaban, jawabanBenar
-      FROM soal
-      ORDER BY id
-    `,
+        SELECT id, jawaban, jawabanBenar
+        FROM soal
+        ORDER BY id
+      `,
       )
       .all();
 
@@ -251,9 +263,9 @@ if (jumlahSoal === 0 && fs.existsSync(fileSoal)) {
       const hasil = db
         .prepare(
           `
-        INSERT INTO soal (id, pertanyaan, kategori_id)
-        VALUES (?, ?, ?)
-      `,
+          INSERT INTO soal (id, pertanyaan, kategori_id)
+          VALUES (?, ?, ?)
+        `,
         )
         .run(item.id, item.pertanyaan, kategoriUmum);
 
@@ -295,11 +307,11 @@ function formatSoal(item) {
   const opsi = db
     .prepare(
       `
-    SELECT teks_opsi, benar
-    FROM opsi_jawaban
-    WHERE soal_id = ?
-    ORDER BY id
-  `,
+      SELECT teks_opsi, benar
+      FROM opsi_jawaban
+      WHERE soal_id = ?
+      ORDER BY id
+    `,
     )
     .all(item.id);
 
@@ -354,7 +366,8 @@ app.use((req, res, next) => {
     .prepare(
       `
     ${querySoal}
-    WHERE LOWER(soal.pertanyaan) LIKE ?
+    WHERE soal.aktif = 1
+      AND LOWER(soal.pertanyaan) LIKE ?
     ORDER BY soal.id
   `,
     )
@@ -382,7 +395,8 @@ app.get("/soal", (req, res) => {
       .prepare(
         `
       ${querySoal}
-      WHERE LOWER(kategori.nama) = LOWER(?)
+      WHERE soal.aktif = 1
+        AND LOWER(kategori.nama) = LOWER(?)
       ORDER BY soal.id
     `,
       )
@@ -392,6 +406,7 @@ app.get("/soal", (req, res) => {
       .prepare(
         `
       ${querySoal}
+      WHERE soal.aktif = 1
       ORDER BY soal.id
     `,
       )
@@ -417,9 +432,10 @@ app.get("/soal/:id", (req, res) => {
   const data = db
     .prepare(
       `
-    ${querySoal}
-    WHERE soal.id = ?
-  `,
+      ${querySoal}
+      WHERE soal.id = ?
+        AND soal.aktif = 1
+    `,
     )
     .get(id);
 
@@ -688,7 +704,6 @@ app.delete("/soal/:id", (req, res) => {
   }
 
   try {
-    // Format data sebelum dihapus
     const dataTerhapus = formatSoal(data);
 
     db.prepare("DELETE FROM soal WHERE id = ?").run(id);
@@ -712,28 +727,24 @@ app.delete("/soal/:id", (req, res) => {
 app.post("/riwayat", (req, res) => {
   const { nama_pemain, kategori_id, jawaban } = req.body;
 
-  // Validasi nama pemain
   if (typeof nama_pemain !== "string" || !nama_pemain.trim()) {
     return res.status(400).json({
       pesan: "Nama pemain tidak boleh kosong",
     });
   }
 
-  // Validasi kategori
   if (!kategoriAda(kategori_id)) {
     return res.status(400).json({
       pesan: "Kategori tidak ditemukan atau tidak valid",
     });
   }
 
-  // Validasi daftar jawaban
   if (!Array.isArray(jawaban) || jawaban.length === 0) {
     return res.status(400).json({
       pesan: "Daftar jawaban tidak boleh kosong",
     });
   }
 
-  // Validasi setiap soal dan opsi yang dipilih
   const dataJawaban = [];
 
   for (const item of jawaban) {
@@ -750,12 +761,19 @@ app.post("/riwayat", (req, res) => {
     }
 
     const soal = db
-      .prepare("SELECT id, kategori_id FROM soal WHERE id = ?")
+      .prepare("SELECT id, kategori_id, aktif FROM soal WHERE id = ?")
       .get(item.soal_id);
 
     if (!soal) {
       return res.status(400).json({
         pesan: `Soal ID ${item.soal_id} tidak ditemukan`,
+      });
+    }
+
+    // Tolak soal yang sudah dinonaktifkan
+    if (soal.aktif !== 1) {
+      return res.status(400).json({
+        pesan: `Soal ID ${item.soal_id} sudah dinonaktifkan`,
       });
     }
 
@@ -797,14 +815,11 @@ app.post("/riwayat", (req, res) => {
     });
   }
 
-  // Hitung nilai berdasarkan jawaban yang benar
   const jumlahSoal = dataJawaban.length;
   const jumlahBenar = dataJawaban.filter((item) => item.benar === 1).length;
-
   const nilai = Math.round((jumlahBenar / jumlahSoal) * 100);
 
   try {
-    // Simpan riwayat dan detail secara atomik
     const simpanRiwayat = db.transaction(() => {
       const hasil = db
         .prepare(
@@ -833,7 +848,6 @@ app.post("/riwayat", (req, res) => {
 
     const riwayatId = simpanRiwayat();
 
-    // Ambil kembali data yang sudah disimpan
     const data = db
       .prepare(
         `
@@ -875,14 +889,12 @@ app.post("/riwayat", (req, res) => {
 app.get("/riwayat/:id", (req, res) => {
   const id = Number(req.params.id);
 
-  // Validasi ID
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).json({
       pesan: "ID riwayat tidak valid",
     });
   }
 
-  // Ambil data utama riwayat
   const riwayat = db
     .prepare(
       `
@@ -907,7 +919,7 @@ app.get("/riwayat/:id", (req, res) => {
     });
   }
 
-  // Ambil detail jawaban
+  // Tidak memakai filter soal.aktif karena riwayat lama harus tetap terlihat.
   const detail = db
     .prepare(
       `
@@ -916,11 +928,7 @@ app.get("/riwayat/:id", (req, res) => {
         s.pertanyaan,
         d.opsi_id,
         o.teks_opsi AS jawaban_dipilih,
-        d.benar,
-        CASE
-          WHEN d.benar = 1 THEN 'Benar'
-          ELSE 'Salah'
-        END AS status
+        d.benar
       FROM detail_riwayat d
       JOIN soal s ON d.soal_id = s.id
       JOIN opsi_jawaban o ON d.opsi_id = o.id
@@ -931,10 +939,10 @@ app.get("/riwayat/:id", (req, res) => {
     .all(id);
 
   res.status(200).json({
-    data: {
-      ...riwayat,
-      detail,
-    },
+    ...riwayat,
+    jumlah_benar: detail.filter((item) => item.benar === 1).length,
+    jumlah_salah: detail.filter((item) => item.benar === 0).length,
+    detail,
   });
 });
 
@@ -1001,7 +1009,6 @@ app.get("/riwayat", (req, res) => {
   });
 });
 
-
 // ======================================
 // GET LEADERBOARD
 // ======================================
@@ -1063,7 +1070,6 @@ app.get("/leaderboard", (req, res) => {
     data,
   });
 });
-
 
 // ======================================
 // MENJALANKAN SERVER
