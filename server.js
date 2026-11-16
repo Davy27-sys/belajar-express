@@ -6,6 +6,33 @@ const path = require("path");
 const app = express();
 const PORT = 3001;
 
+// ======================================
+// KONFIGURASI CORS
+// ======================================
+
+const originDiizinkan = "http://localhost:5173";
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (origin === originDiizinkan) {
+    res.setHeader("Access-Control-Allow-Origin", originDiizinkan);
+    res.setHeader("Vary", "Origin");
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, OPTIONS, QUERY",
+    );
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  }
+
+  // Menangani request preflight dari browser
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
+
 app.use(express.json());
 
 const fileDB = path.join(__dirname, "soal.db");
@@ -307,7 +334,7 @@ function formatSoal(item) {
   const opsi = db
     .prepare(
       `
-      SELECT teks_opsi, benar
+      SELECT id, teks_opsi, benar
       FROM opsi_jawaban
       WHERE soal_id = ?
       ORDER BY id
@@ -320,7 +347,10 @@ function formatSoal(item) {
     pertanyaan: item.pertanyaan,
     kategori_id: item.kategori_id,
     kategori: item.kategori,
-    jawaban: opsi.map((o) => o.teks_opsi),
+    jawaban: opsi.map((o) => ({
+      opsi_id: o.id,
+      teks_opsi: o.teks_opsi,
+    })),
     jawabanBenar: opsi.find((o) => o.benar === 1)?.teks_opsi ?? null,
   };
 }
