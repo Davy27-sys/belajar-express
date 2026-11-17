@@ -479,6 +479,76 @@ app.get("/soal/:id", (req, res) => {
 });
 
 // ======================================
+// GET DETAIL RIWAYAT KUIS BERDASARKAN ID
+// ======================================
+
+app.get("/riwayat/:id", (req, res) => {
+  const id = Number(req.params.id);
+
+  // Validasi ID
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({
+      pesan: "ID riwayat tidak valid",
+    });
+  }
+
+  // Ambil data utama riwayat
+  const riwayat = db
+    .prepare(
+      `
+      SELECT
+        r.id,
+        r.nama_pemain,
+        r.tanggal,
+        r.kategori_id,
+        k.nama AS kategori,
+        r.nilai,
+        r.jumlah_soal
+      FROM riwayat_kuis r
+      JOIN kategori k ON r.kategori_id = k.id
+      WHERE r.id = ?
+    `,
+    )
+    .get(id);
+
+  if (!riwayat) {
+    return res.status(404).json({
+      pesan: "Riwayat kuis tidak ditemukan",
+    });
+  }
+
+  // Ambil detail jawaban
+  const detail = db
+    .prepare(
+      `
+      SELECT
+        d.soal_id,
+        s.pertanyaan,
+        d.opsi_id,
+        o.teks_opsi AS jawaban_dipilih,
+        d.benar,
+        CASE
+          WHEN d.benar = 1 THEN 'Benar'
+          ELSE 'Salah'
+        END AS status
+      FROM detail_riwayat d
+      JOIN soal s ON d.soal_id = s.id
+      JOIN opsi_jawaban o ON d.opsi_id = o.id
+      WHERE d.riwayat_id = ?
+      ORDER BY d.id
+    `,
+    )
+    .all(id);
+
+  res.status(200).json({
+    data: {
+      ...riwayat,
+      detail,
+    },
+  });
+});
+
+// ======================================
 // POST TAMBAH SOAL
 // ======================================
 
@@ -916,18 +986,19 @@ app.post("/riwayat", (req, res) => {
 // GET DETAIL RIWAYAT KUIS
 // ======================================
 
-app.get("/riwayat/:id", (req, res) => {
-  const id = Number(req.params.id);
+("/riwayat/:id",
+  (req, res) => {
+    const id = Number(req.params.id);
 
-  if (!Number.isInteger(id) || id <= 0) {
-    return res.status(400).json({
-      pesan: "ID riwayat tidak valid",
-    });
-  }
+    if (!Numbapp.geter.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        pesan: "ID riwayat tidak valid",
+      });
+    }
 
-  const riwayat = db
-    .prepare(
-      `
+    const riwayat = db
+      .prepare(
+        `
       SELECT
         r.id,
         r.nama_pemain,
@@ -940,19 +1011,19 @@ app.get("/riwayat/:id", (req, res) => {
       JOIN kategori k ON r.kategori_id = k.id
       WHERE r.id = ?
     `,
-    )
-    .get(id);
+      )
+      .get(id);
 
-  if (!riwayat) {
-    return res.status(404).json({
-      pesan: "Riwayat kuis tidak ditemukan",
-    });
-  }
+    if (!riwayat) {
+      return res.status(404).json({
+        pesan: "Riwayat kuis tidak ditemukan",
+      });
+    }
 
-  // Tidak memakai filter soal.aktif karena riwayat lama harus tetap terlihat.
-  const detail = db
-    .prepare(
-      `
+    // Tidak memakai filter soal.aktif karena riwayat lama harus tetap terlihat.
+    const detail = db
+      .prepare(
+        `
       SELECT
         d.soal_id,
         s.pertanyaan,
@@ -965,16 +1036,16 @@ app.get("/riwayat/:id", (req, res) => {
       WHERE d.riwayat_id = ?
       ORDER BY d.id
     `,
-    )
-    .all(id);
+      )
+      .all(id);
 
-  res.status(200).json({
-    ...riwayat,
-    jumlah_benar: detail.filter((item) => item.benar === 1).length,
-    jumlah_salah: detail.filter((item) => item.benar === 0).length,
-    detail,
+    res.status(200).json({
+      ...riwayat,
+      jumlah_benar: detail.filter((item) => item.benar === 1).length,
+      jumlah_salah: detail.filter((item) => item.benar === 0).length,
+      detail,
+    });
   });
-});
 
 // ======================================
 // GET SEMUA RIWAYAT KUIS
